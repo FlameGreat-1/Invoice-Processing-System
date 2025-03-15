@@ -1,4 +1,4 @@
-# Invoice Processing System
+to# Invoice Processing System
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -307,3 +307,31 @@ Generate CSV/Excel output with one row per invoice
 Achieve processing speed of 100 pages in under 5 minutes
 Maintain 95%+ accuracy on clean scans
 Support at least three vendor formats
+OCR-Model-Project/
+│
+├── Dockerfile
+├── README.md
+├── requirements.txt
+├── app.py
+│
+├── app/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── main.py
+│   ├── models.py
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── data_extractor.py
+│       ├── exporter.py
+│       ├── file_handler.py
+│       ├── ocr_engine.py
+│       └── validator.py
+│
+└── tests/
+    ├── __init__.py
+    ├── test_data_extractor.py
+    ├── test_exporter.py
+    ├── test_file_handler.py
+    ├── test_ocr_engine.py
+    └── test_validator.py
