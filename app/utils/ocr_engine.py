@@ -14,6 +14,7 @@ import logging
 import cv2
 import pytesseract
 import fitz  # PyMuPDF for PDF handling
+from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,57 +29,40 @@ class OCREngine:
         self.model.to(self.device)
         self.gcv_client = vision.ImageAnnotatorClient()
         self.cache = {}  # Simple cache for storing processed results
+        self.executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
 
-    async def process_documents(self, documents: List[Tuple[str, bytes]]) -> Dict[str, Dict]:
+    async def process_documents(self, documents: List[Dict[str, any]]) -> Dict[str, Dict]:
         results = {}
-        tasks = []
-        semaphore = asyncio.Semaphore(5)  # Limit concurrent processing
-
-        async def process_single_document(doc_name: str, doc_bytes: bytes):
-            async with semaphore:
-                try:
-                    # Check cache first
-                    cache_key = hash(doc_bytes)
-                    if cache_key in self.cache:
-                        results[doc_name] = self.cache[cache_key]
-                        return
-
-                    # Determine if it's a multi-page document
-                    is_multipage = self._is_multipage_document(doc_bytes)
-
-                    if is_multipage:
-                        ocr_result = await self._process_multipage_with_layoutlm(doc_name, doc_bytes)
-                    else:
-                        ocr_result = await self._process_single_page(doc_name, doc_bytes)
-
-                    results[doc_name] = ocr_result
-                    self.cache[cache_key] = ocr_result  # Cache the result
-                except Exception as e:
-                    logger.error(f"Error processing {doc_name}: {str(e)}")
-                    results[doc_name] = {"error": str(e)}
-
-        for doc_name, doc_bytes in documents:
-            task = asyncio.create_task(process_single_document(doc_name, doc_bytes))
-            tasks.append(task)
-
-        await asyncio.gather(*tasks)
+        batches = self._create_batches(documents, batch_size=settings.BATCH_SIZE)
+        
+        for batch in batches:
+            batch_results = await asyncio.gather(*[self._process_document(doc) for doc in batch])
+            results.update(batch_results)
+        
         return results
 
-    def _is_multipage_document(self, doc_bytes: bytes) -> bool:
-        try:
-            pdf_doc = fitz.open(stream=doc_bytes, filetype="pdf")
-            return len(pdf_doc) > 1
-        except:
-            return False  # Not a PDF or single-page document
+    def _create_batches(self, documents: List[Dict[str, any]], batch_size: int) -> List[List[Dict[str, any]]]:
+        return [documents[i:i + batch_size] for i in range(0, len(documents), batch_size)]
 
-    async def _process_multipage_with_layoutlm(self, doc_name: str, doc_bytes: bytes) -> Dict:
-        pdf_doc = fitz.open(stream=doc_bytes, filetype="pdf")
-        pages = []
-        for page_num in range(len(pdf_doc)):
-            page = pdf_doc.load_page(page_num)
-            pix = page.get_pixmap()
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            pages.append(img)
+    async def _process_document(self, document: Dict[str, any]) -> Tuple[str, Dict]:
+        try:
+            cache_key = hash(document['content'])
+            if cache_key in self.cache:
+                return document['filename'], self.cache[cache_key]
+
+            if document['is_multipage']:
+                ocr_result = await self._process_multipage_with_layoutlm(document)
+            else:
+                ocr_result = await self._process_single_page(document)
+
+            self.cache[cache_key] = ocr_result
+            return document['filename'], ocr_result
+        except Exception as e:
+            logger.error(f"Error processing {document['filename']}: {str(e)}")
+            return document['filename'], {"error": str(e)}
+
+    async def _process_multipage_with_layoutlm(self, document: Dict[str, any]) -> Dict:
+        pages = [Image.open(io.BytesIO(page['content'])) for page in document['pages']]
 
         # Process all pages together
         encoding = self.processor(pages, return_tensors="pt", padding=True, truncation=True)
@@ -99,10 +83,13 @@ class OCREngine:
             "words": words,
             "boxes": boxes,
             "is_multipage": True,
-            "num_pages": len(pdf_doc)
+            "num_pages": len(pages)
         }
 
-    async def _process_single_page(self, image_name: str, image_bytes: bytes) -> Dict:
+    async def _process_single_page(self, document: Dict[str, any]) -> Dict:
+        image_bytes = document['content']
+        image_name = document['filename']
+        
         try:
             ocr_result = await self._process_with_layoutlm(image_name, image_bytes)
             if not ocr_result:
@@ -129,7 +116,7 @@ class OCREngine:
         
         return {
             "words": words,
-            "boxes": boxes.tolist(),
+            "boxes": boxes,
             "is_multipage": False,
             "num_pages": 1
         }
@@ -166,6 +153,10 @@ class OCREngine:
         }
 
     async def _process_with_tesseract(self, image_name: str, image_bytes: bytes) -> Dict:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, self._process_with_tesseract_sync, image_name, image_bytes)
+
+    def _process_with_tesseract_sync(self, image_name: str, image_bytes: bytes) -> Dict:
         image = Image.open(io.BytesIO(image_bytes))
         image_np = np.array(image)
 
