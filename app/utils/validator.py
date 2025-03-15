@@ -40,9 +40,8 @@ class InvoiceValidator:
         return len(errors) == 0, errors
 
     def _validate_invoice_number(self, invoice_number: str) -> bool:
-        # Check if the invoice number matches the format (e.g., INV-001)
-        pattern = r'^INV-\d{3}$'
-        return re.match(pattern, invoice_number) is not None
+            # Check if the invoice number is not empty and contains at least one alphanumeric character
+        return bool(invoice_number) and any(char.isalnum() for char in invoice_number)
 
     def _validate_vendor(self, vendor: Vendor) -> List[str]:
         errors = []
@@ -63,8 +62,8 @@ class InvoiceValidator:
         return (grand_total + taxes) == final_total
 
     def _validate_multi_page(self, invoice: Invoice) -> bool:
-        # Check if the number of pages is consistent with the multi-page flag
-        return (invoice.pages > 1) == invoice.is_multipage
+    # Check if the number of pages is valid (1 or more)
+    return invoice.pages >= 1
 
     def validate_extracted_data(self, extracted_data: Dict) -> Tuple[bool, List[str]]:
         try:
