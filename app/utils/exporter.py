@@ -6,8 +6,10 @@ from decimal import Decimal
 from datetime import datetime
 import io
 import logging
-from app.models import Invoice
+from app.models import Invoice, Address
 from app.config import settings
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +20,13 @@ class InvoiceExporter:
             "Invoice Date", "Grand Total", "Taxes", "Final Total", "Pages",
             "Item Descriptions", "Item Quantities", "Item Unit Prices", "Item Totals"
         ]
+        self.executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
 
-    def export_to_csv(self, invoices: List[Invoice]) -> io.StringIO:
+    async def export_to_csv(self, invoices: List[Invoice]) -> io.StringIO:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, self._export_to_csv_sync, invoices)
+
+    def _export_to_csv_sync(self, invoices: List[Invoice]) -> io.StringIO:
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=self.csv_columns)
         writer.writeheader()
@@ -31,7 +38,11 @@ class InvoiceExporter:
         output.seek(0)
         return output
 
-    def export_to_excel(self, invoices: List[Invoice]) -> io.BytesIO:
+    async def export_to_excel(self, invoices: List[Invoice]) -> io.BytesIO:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, self._export_to_excel_sync, invoices)
+
+    def _export_to_excel_sync(self, invoices: List[Invoice]) -> io.BytesIO:
         workbook = openpyxl.Workbook()
         sheet = workbook.active
         sheet.title = "Invoices"
@@ -65,8 +76,8 @@ class InvoiceExporter:
             "Item Totals": "|".join([str(item.total) for item in invoice.items])
         }
 
-    def _format_address(self, address: Dict) -> str:
-        return f"{address['street']}, {address['city']}, {address['state']} {address['postal_code']}, {address['country']}"
+    def _format_address(self, address: Address) -> str:
+        return f"{address.street}, {address.city}, {address.state} {address.postal_code}, {address.country}"
 
     def _write_excel_header(self, sheet: openpyxl.worksheet.worksheet.Worksheet):
         for col, header in enumerate(self.csv_columns, start=1):
@@ -101,14 +112,14 @@ class InvoiceExporter:
             adjusted_width = (max_length + 2)
             sheet.column_dimensions[column_letter].width = adjusted_width
 
-def export_invoices(invoices: List[Invoice], format: str) -> io.BytesIO:
+async def export_invoices(invoices: List[Invoice], format: str) -> io.BytesIO:
     exporter = InvoiceExporter()
     try:
         if format.lower() == 'csv':
-            output = exporter.export_to_csv(invoices)
+            output = await exporter.export_to_csv(invoices)
             return io.BytesIO(output.getvalue().encode())
         elif format.lower() == 'excel':
-            return exporter.export_to_excel(invoices)
+            return await exporter.export_to_excel(invoices)
         else:
             raise ValueError(f"Unsupported export format: {format}")
     except Exception as e:
