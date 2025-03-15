@@ -11,12 +11,15 @@ import usaddress
 import pycountry
 import dateparser
 from price_parser import Price
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 class DataExtractor:
     def __init__(self):
         self.nlp = spacy.load("en_core_web_sm")
         self.matcher = Matcher(self.nlp.vocab)
         self._setup_matchers()
+        self.executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
 
     def _setup_matchers(self):
         self.matcher.add("INVOICE_NUMBER", [[{"LOWER": "invoice"}, {"LOWER": "number"}, {"IS_ASCII": True, "LENGTH": {">=": 5}}]])
@@ -24,21 +27,21 @@ class DataExtractor:
         self.matcher.add("TOTAL_AMOUNT", [[{"LOWER": {"IN": ["total", "amount", "sum"]}}, {"LIKE_NUM": True}]])
         self.matcher.add("TAX_AMOUNT", [[{"LOWER": {"IN": ["tax", "vat", "gst"]}}, {"LIKE_NUM": True}]])
 
-    def extract_data(self, ocr_result: Dict) -> Invoice:
+    async def extract_data(self, ocr_result: Dict) -> Invoice:
         if ocr_result.get("is_multipage", False):
-            return self._extract_multipage_data(ocr_result)
+            return await self._extract_multipage_data(ocr_result)
         else:
-            return self._extract_single_page_data(ocr_result)
+            return await self._extract_single_page_data(ocr_result)
 
-    def _extract_multipage_data(self, ocr_result: Dict) -> Invoice:
+    async def _extract_multipage_data(self, ocr_result: Dict) -> Invoice:
         text = " ".join(ocr_result["words"])
-        doc = self.nlp(text)
+        doc = await self._process_text(text)
 
         invoice_number = self._extract_invoice_number(doc)
         vendor = self._extract_vendor(doc)
         invoice_date = self._extract_date(doc)
         grand_total, taxes, final_total = self._extract_totals(doc)
-        items = self._extract_items_multipage(doc, ocr_result["boxes"])
+        items = await self._extract_items_multipage(doc, ocr_result["boxes"])
 
         return Invoice(
             filename=ocr_result.get("filename", ""),
@@ -52,15 +55,15 @@ class DataExtractor:
             pages=ocr_result.get("num_pages", 1)
         )
 
-    def _extract_single_page_data(self, ocr_result: Dict) -> Invoice:
+    async def _extract_single_page_data(self, ocr_result: Dict) -> Invoice:
         text = " ".join(ocr_result["words"])
-        doc = self.nlp(text)
+        doc = await self._process_text(text)
 
         invoice_number = self._extract_invoice_number(doc)
         vendor = self._extract_vendor(doc)
         invoice_date = self._extract_date(doc)
         grand_total, taxes, final_total = self._extract_totals(doc)
-        items = self._extract_items(doc, ocr_result["boxes"])
+        items = await self._extract_items(doc, ocr_result["boxes"])
 
         return Invoice(
             filename=ocr_result.get("filename", ""),
@@ -73,6 +76,10 @@ class DataExtractor:
             items=items,
             pages=1
         )
+
+    async def _process_text(self, text: str) -> Doc:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, self.nlp, text)
 
     def _extract_invoice_number(self, doc: Doc) -> str:
         matches = self.matcher(doc)
@@ -151,7 +158,11 @@ class DataExtractor:
         grand_total = final_total - taxes
         return grand_total, taxes, final_total
 
-    def _extract_items(self, doc: Doc, boxes: List[List[int]]) -> List[InvoiceItem]:
+    async def _extract_items(self, doc: Doc, boxes: List[List[int]]) -> List[InvoiceItem]:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, self._extract_items_sync, doc, boxes)
+
+    def _extract_items_sync(self, doc: Doc, boxes: List[List[int]]) -> List[InvoiceItem]:
         items = []
         for i, sent in enumerate(doc.sents):
             if any(token.like_num for token in sent):
@@ -172,7 +183,11 @@ class DataExtractor:
                         ))
         return items
 
-    def _extract_items_multipage(self, doc: Doc, boxes: List[List[int]]) -> List[InvoiceItem]:
+    async def _extract_items_multipage(self, doc: Doc, boxes: List[List[int]]) -> List[InvoiceItem]:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, self._extract_items_multipage_sync, doc, boxes)
+
+    def _extract_items_multipage_sync(self, doc: Doc, boxes: List[List[int]]) -> List[InvoiceItem]:
         items = []
         item_start_phrases = ["item", "description", "product"]
         in_item_section = False
@@ -214,4 +229,3 @@ class DataExtractor:
         return items
 
 data_extractor = DataExtractor()
-
