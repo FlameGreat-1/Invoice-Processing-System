@@ -202,4 +202,108 @@ Achieves high accuracy on clean scans
 Supports multiple vendor formats
 
 
+Invoice Processing System: Comprehensive Project Description and Requirements
 
+1. System Goal
+
+Extract key details from 80-100 vendor bills (1-2 pages each) in one upload
+Export extracted data as a line-item list
+
+
+2. File Handling
+
+2.1 Accepted File Types
+
+PDF
+JPG
+PNG
+ZIP
+
+
+2.2 File Size Limit
+
+Maximum 100MB per upload
+
+
+2.3 Multi-page Handling
+
+Auto-detect multi-page invoices (e.g., pages 1-2 of same bill)
+Merge split pages using headers/totals
+
+
+3. Data Extraction
+
+3.1 Required Fields
+
+Invoice Number (e.g., INV-001)
+Vendor Name & Address
+Invoice Date
+Grand Total
+Taxes
+Final Total (Grand Total + Taxes)
+
+
+3.2 Validation and Flagging
+
+Validate amounts match (error if Grand Total + Taxes ≠ Final Total)
+Flag future dates
+Flag unapproved vendors
+
+
+4. Output
+
+4.1 File Formats
+
+CSV
+Excel
+
+
+4.2 Output Structure
+
+One row per invoice
+Columns: Filename, Invoice Number, Vendor, Date, Totals, Pages
+
+
+5. Technical Requirements
+
+5.1 OCR Technologies
+
+Primary: Tesseract (for text) + PaddleOCR (for tables)
+Backup: Google Cloud Vision (for poor-quality scans)
+
+
+5.2 Performance Metrics
+
+Process 100 pages in less than 5 minutes
+Achieve 95%+ accuracy on clean scans
+
+
+5.3 Vendor Format Support
+
+Support PDFs from at least 3 different vendor formats
+
+
+6. Success Metrics
+
+6.1 Multi-page Handling
+
+Correctly group 95% of multi-page bills
+
+
+6.2 Data Extraction Accuracy
+
+Extract 19 out of 20 invoice numbers correctly (95% accuracy)
+Export all totals with 100% mathematical accuracy
+
+
+7. System Requirements Summary
+
+Process 80-100 invoices per upload, some spanning two pages
+Automatically detect and merge multi-page invoices
+Extract key details: Invoice Number, Vendor Name/Address, Invoice Date, Grand Total, Taxes, Final Total
+Implement OCR using Tesseract, PaddleOCR, and Google Cloud Vision as backup
+Perform validation checks on totals and dates
+Generate CSV/Excel output with one row per invoice
+Achieve processing speed of 100 pages in under 5 minutes
+Maintain 95%+ accuracy on clean scans
+Support at least three vendor formats
