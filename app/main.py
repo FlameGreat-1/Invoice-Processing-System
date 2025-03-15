@@ -13,6 +13,8 @@ from app.utils.data_extractor import data_extractor
 from app.utils.validator import invoice_validator, flag_anomalies
 from app.utils.exporter import export_invoices
 from app.models import Invoice, ProcessingStatus
+from app.celery_app import process_file_task, process_multiple_files_task
+from celery.result import AsyncResult
 import logging
 
 app = FastAPI(title=settings.PROJECT_NAME, version="1.0.0")
@@ -32,69 +34,58 @@ class ProcessingResponse(BaseModel):
 processing_tasks = {}
 
 @app.post("/upload/", response_model=ProcessingRequest)
-async def upload_files(files: List[UploadFile] = File(...), background_tasks: BackgroundTasks = None):
+async def upload_files(files: List[UploadFile] = File(...)):
     task_id = str(uuid.uuid4())
     processing_tasks[task_id] = ProcessingStatus(status="Queued", progress=0, message="Task queued")
     
-    background_tasks.add_task(process_files, task_id, files)
+    temp_dir = tempfile.mkdtemp()
+    file_paths = []
+
+    for file in files:
+        file_path = os.path.join(temp_dir, file.filename)
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        file_paths.append(file_path)
+
+    if len(files) == 1:
+        # Single file processing
+        celery_task = process_file_task.delay(task_id, file_paths[0])
+    else:
+        # Multiple files processing
+        celery_task = process_multiple_files_task.delay(task_id, file_paths)
+    
+    processing_tasks[task_id] = ProcessingStatus(status="Processing", progress=0, message="Processing started")
     
     return ProcessingRequest(task_id=task_id)
-
-async def process_files(task_id: str, files: List[UploadFile]):
-    try:
-        processing_tasks[task_id] = ProcessingStatus(status="Processing", progress=0, message="Starting processing")
-        
-        temp_dir = tempfile.mkdtemp()
-        processed_files = []
-
-        for idx, file in enumerate(files):
-            file_path = os.path.join(temp_dir, file.filename)
-            with open(file_path, "wb") as buffer:
-                content = await file.read()
-                buffer.write(content)
-            processed_files.extend(file_handler.process_upload(file_path))
-            progress = (idx + 1) / len(files) * 30
-            processing_tasks[task_id] = ProcessingStatus(status="Processing", progress=progress, message=f"Processed {idx + 1} of {len(files)} files")
-
-        ocr_results = await ocr_engine.process_images(processed_files)
-        processing_tasks[task_id] = ProcessingStatus(status="Processing", progress=60, message="OCR completed")
-
-        extracted_data = [data_extractor.extract_data(result) for result in ocr_results.values()]
-        processing_tasks[task_id] = ProcessingStatus(status="Processing", progress=80, message="Data extraction completed")
-
-        validated_data = [invoice for invoice, is_valid, _ in invoice_validator.validate_invoice_batch(extracted_data) if is_valid]
-        flagged_invoices = flag_anomalies(validated_data)
-        
-        csv_output = export_invoices(validated_data, 'csv')
-        excel_output = export_invoices(validated_data, 'excel')
-        
-        # Save outputs to temporary files
-        csv_path = os.path.join(temp_dir, f"{task_id}_invoices.csv")
-        excel_path = os.path.join(temp_dir, f"{task_id}_invoices.xlsx")
-        
-        with open(csv_path, 'wb') as f:
-            f.write(csv_output.getvalue())
-        with open(excel_path, 'wb') as f:
-            f.write(excel_output.getvalue())
-        
-        processing_tasks[task_id] = ProcessingStatus(status="Completed", progress=100, message="Processing completed")
-        
-    except Exception as e:
-        logger.error(f"Error processing files for task {task_id}: {str(e)}")
-        processing_tasks[task_id] = ProcessingStatus(status="Failed", progress=100, message=f"Error: {str(e)}")
 
 @app.get("/status/{task_id}", response_model=ProcessingResponse)
 async def get_processing_status(task_id: str):
     if task_id not in processing_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    return ProcessingResponse(task_id=task_id, status=processing_tasks[task_id])
+    
+    celery_task = AsyncResult(task_id)
+    if celery_task.state == 'PENDING':
+        status = "Queued"
+    elif celery_task.state == 'STARTED':
+        status = "Processing"
+    elif celery_task.state == 'SUCCESS':
+        status = "Completed"
+    else:
+        status = "Failed"
+    
+    progress = celery_task.info.get('progress', 0) if celery_task.info else 0
+    message = celery_task.info.get('message', '') if celery_task.info else ''
+    
+    return ProcessingResponse(task_id=task_id, status=ProcessingStatus(status=status, progress=progress, message=message))
 
 @app.get("/download/{task_id}")
 async def download_results(task_id: str, format: str = "csv"):
     if task_id not in processing_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    if processing_tasks[task_id].status != "Completed":
+    celery_task = AsyncResult(task_id)
+    if celery_task.state != 'SUCCESS':
         raise HTTPException(status_code=400, detail="Processing not completed")
     
     temp_dir = tempfile.gettempdir()
@@ -114,15 +105,12 @@ async def download_results(task_id: str, format: str = "csv"):
 
 @app.on_event("startup")
 async def startup_event():
-    # Perform any necessary startup tasks
     logger.info("Application is starting up")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    # Perform any necessary cleanup tasks
     logger.info("Application is shutting down")
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-    
