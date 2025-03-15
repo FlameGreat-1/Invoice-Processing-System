@@ -1,4 +1,4 @@
-to# Invoice Processing System
+# Invoice Processing System
 
 ## Table of Contents
 1. [Introduction](#introduction)
