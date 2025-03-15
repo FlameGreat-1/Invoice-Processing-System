@@ -25,6 +25,34 @@ class DataExtractor:
         self.matcher.add("TAX_AMOUNT", [[{"LOWER": {"IN": ["tax", "vat", "gst"]}}, {"LIKE_NUM": True}]])
 
     def extract_data(self, ocr_result: Dict) -> Invoice:
+        if ocr_result.get("is_multipage", False):
+            return self._extract_multipage_data(ocr_result)
+        else:
+            return self._extract_single_page_data(ocr_result)
+
+    def _extract_multipage_data(self, ocr_result: Dict) -> Invoice:
+        text = " ".join(ocr_result["words"])
+        doc = self.nlp(text)
+
+        invoice_number = self._extract_invoice_number(doc)
+        vendor = self._extract_vendor(doc)
+        invoice_date = self._extract_date(doc)
+        grand_total, taxes, final_total = self._extract_totals(doc)
+        items = self._extract_items_multipage(doc, ocr_result["boxes"])
+
+        return Invoice(
+            filename=ocr_result.get("filename", ""),
+            invoice_number=invoice_number,
+            vendor=vendor,
+            invoice_date=invoice_date,
+            grand_total=grand_total,
+            taxes=taxes,
+            final_total=final_total,
+            items=items,
+            pages=ocr_result.get("num_pages", 1)
+        )
+
+    def _extract_single_page_data(self, ocr_result: Dict) -> Invoice:
         text = " ".join(ocr_result["words"])
         doc = self.nlp(text)
 
@@ -43,7 +71,7 @@ class DataExtractor:
             taxes=taxes,
             final_total=final_total,
             items=items,
-            pages=ocr_result.get("pages", 1)
+            pages=1
         )
 
     def _extract_invoice_number(self, doc: Doc) -> str:
@@ -144,4 +172,46 @@ class DataExtractor:
                         ))
         return items
 
+    def _extract_items_multipage(self, doc: Doc, boxes: List[List[int]]) -> List[InvoiceItem]:
+        items = []
+        item_start_phrases = ["item", "description", "product"]
+        in_item_section = False
+        current_item = None
+
+        for i, sent in enumerate(doc.sents):
+            sent_text = sent.text.lower()
+            
+            # Check if we're entering the item section
+            if any(phrase in sent_text for phrase in item_start_phrases):
+                in_item_section = True
+                continue
+
+            if in_item_section:
+                if current_item is None:
+                    current_item = {"description": "", "quantity": None, "unit_price": None, "total": None}
+
+                # Check if this sentence contains numeric values
+                numbers = [Price.fromstring(token.text) for token in sent if token.like_num or token.is_currency]
+                
+                if numbers:
+                    # If we have numbers, try to fill in the item details
+                    if len(numbers) >= 3:
+                        current_item["quantity"] = int(numbers[0].amount) if numbers[0].amount else 1
+                        current_item["unit_price"] = Decimal(str(numbers[1].amount)) if numbers[1].amount else Decimal('0.00')
+                        current_item["total"] = Decimal(str(numbers[2].amount)) if numbers[2].amount else Decimal('0.00')
+                        
+                        # Add the item and reset
+                        items.append(InvoiceItem(**current_item))
+                        current_item = None
+                else:
+                    # If no numbers, add to the description
+                    current_item["description"] += " " + sent.text
+
+        # Add any remaining item
+        if current_item and current_item["quantity"] is not None:
+            items.append(InvoiceItem(**current_item))
+
+        return items
+
 data_extractor = DataExtractor()
+
