@@ -3,6 +3,8 @@ fastapi==0.68.1
 uvicorn==0.15.0
 python-multipart==0.0.5
 pydantic==1.8.2
+celery==5.1.2
+redis==3.5.3
 
 # Data processing and analysis
 numpy==1.21.2
