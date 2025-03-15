@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     MULTI_PAGE_THRESHOLD: float = 0.95  # 95% confidence for multi-page detection
     INVOICE_NUMBER_ACCURACY: float = 0.95  # 95% accuracy for invoice number extraction
     TOTAL_MATH_ACCURACY: float = 1.0  # 100% accuracy for total calculations
+    MAX_WORKERS: int = 5  # or any other appropriate number
 
     # Output Configuration
     OUTPUT_FORMAT: str = "csv"  # or "excel"
