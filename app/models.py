@@ -30,7 +30,7 @@ class Invoice(BaseModel):
     taxes: Decimal
     final_total: Decimal
     items: List[InvoiceItem]
-    pages: int = Field(ge=1, le=2)
+    pages: int = Field(ge=1)
 
     @validator('final_total')
     def validate_final_total(cls, v, values):
